@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { X, Smartphone, Check } from "lucide-react";
-import { fetchUpdate, readUpdatePreferences, shouldShowUpdate, YYK_REPOSITORY, YYK_UPDATE_KEY, YYK_VERSION, type UpdateNotice, type UpdatePreferences } from "@/lib/yyk-updates";
+import { fetchUpdate, parseUpdate, readUpdatePreferences, shouldShowUpdate, YYK_REPOSITORY, YYK_UPDATE_KEY, YYK_VERSION, type UpdateNotice, type UpdatePreferences } from "@/lib/yyk-updates";
+import bundledRelease from "@/public/yyk-update.json";
 import styles from "./yyk-update-notice.module.css";
 
 export function YykUpdateCard({ notice, onClose, preview = false }: { notice: UpdateNotice; onClose: (dismiss: boolean) => void; preview?: boolean }) {
+    const installed = notice.version === YYK_VERSION;
     const [guide, setGuide] = useState(false);
     const panel = useRef<HTMLElement>(null);
     useEffect(() => {
@@ -23,13 +25,13 @@ export function YykUpdateCard({ notice, onClose, preview = false }: { notice: Up
     }}>
         <section ref={panel} className={styles.card} role="dialog" aria-modal="true" aria-labelledby="yyk-update-title" aria-describedby="yyk-update-description">
             <button className={styles.close} aria-label="关闭更新卡片" onClick={() => onClose(false)}><X size={18} /></button>
-            <div className={styles.sender}><span className={styles.mark}><Smartphone size={23} /></span><div><strong>float-Yyk</strong><div className={styles.meta}>{preview ? "预览 · " : `v${YYK_VERSION} → `}v{notice.version} · {notice.date}</div></div></div>
+            <div className={styles.sender}><span className={styles.mark}><Smartphone size={23} /></span><div><strong>float-Yyk</strong><div className={styles.meta}>{preview ? "预览 · " : installed ? "已更新 · " : `v${YYK_VERSION} → `}v{notice.version} · {notice.date}</div></div></div>
             <h2 id="yyk-update-title">Float-二改项目-Yyk版本</h2>
-            <p id="yyk-update-description" className={styles.intro}>本次更新内容如下。<br />如有需要，可同步仓库并重新部署。</p>
+            <p id="yyk-update-description" className={styles.intro}>本次更新内容如下。<br />{installed ? "你正在使用此版本。" : "如有需要，可同步仓库并重新部署。"}</p>
             <ul className={styles.changes}>{notice.changes.map((item, i) => <li key={i}><Check size={19} /><div><strong>{item.title}</strong><p>{item.text}</p></div></li>)}</ul>
-            <div className={styles.actions}><button className={styles.primary} aria-expanded={guide} aria-controls="yyk-update-guide" onClick={() => setGuide(!guide)}>{guide ? "收起更新方法" : "查看拉取方法"}</button><button onClick={() => onClose(false)}>稍后再说</button></div>
+            <div className={styles.actions}><button className={styles.primary} aria-expanded={guide} aria-controls="yyk-update-guide" onClick={() => setGuide(!guide)}>{guide ? "收起更新方法" : "查看拉取方法"}</button><button onClick={() => onClose(false)}>{installed ? "知道了" : "稍后再说"}</button></div>
             {guide && <div id="yyk-update-guide" className={styles.guide}><strong>在你自己的仓库里更新</strong><ol><li>先在小手机里导出重要数据备份。</li><li>打开你的 GitHub fork，选择 Sync fork → Update branch；如有冲突，先确认自己的改动。</li><li>等托管平台重新部署完成；未开启自动部署时，需手动触发部署。再打开原网址。</li></ol><a href={YYK_REPOSITORY} target="_blank" rel="noopener noreferrer">查看公开仓库</a></div>}
-            <button className={styles.dismiss} onClick={() => onClose(true)}>本次不再提醒</button>
+            {!installed && <button className={styles.dismiss} onClick={() => onClose(true)}>本次不再提醒</button>}
             <p className={styles.credit}>本次更新人员：Yyk / Yyk的机</p>
         </section>
     </div>;
@@ -44,8 +46,10 @@ export function YykUpdateNotice() {
         const storage = (() => { try { return window.localStorage; } catch { return null; } })();
         const preferences = storage ? readUpdatePreferences(storage) : {};
         const timer = setTimeout(async () => {
-            let candidate = preferences.notice;
-            if (!candidate || !preferences.checkedAt || Date.now() - preferences.checkedAt > 6 * 60 * 60 * 1000) {
+            const local = parseUpdate(bundledRelease);
+            const installedNotice = local?.version === YYK_VERSION && preferences.seenVersion !== YYK_VERSION ? local : null;
+            let candidate = installedNotice || preferences.notice;
+            if (!installedNotice && (!candidate || !preferences.checkedAt || Date.now() - preferences.checkedAt > 6 * 60 * 60 * 1000)) {
                 timeout = setTimeout(() => controller.abort(), 6000);
                 candidate = await fetchUpdate(controller.signal) || undefined;
                 clearTimeout(timeout);
@@ -58,7 +62,8 @@ export function YykUpdateNotice() {
             const ready = candidate;
             const show = () => {
                 if (controller.signal.aborted || document.visibilityState !== "visible" || document.querySelector('[role="dialog"], [data-ui="modal"]')) return;
-                if (shouldShowUpdate(ready, storage ? readUpdatePreferences(storage) : preferences)) setNotice(ready);
+                const latest = storage ? readUpdatePreferences(storage) : preferences;
+                if (installedNotice ? latest.seenVersion !== YYK_VERSION : shouldShowUpdate(ready, latest)) setNotice(ready);
                 observer?.disconnect();
             };
             observer = new MutationObserver(show);
@@ -72,7 +77,8 @@ export function YykUpdateNotice() {
     return <YykUpdateCard notice={notice} onClose={dismiss => {
         try {
             const preferences: UpdatePreferences = readUpdatePreferences(window.localStorage);
-            if (dismiss) preferences.dismissed = notice.version;
+            if (notice.version === YYK_VERSION) preferences.seenVersion = notice.version;
+            else if (dismiss) preferences.dismissed = notice.version;
             else { preferences.laterVersion = notice.version; preferences.laterUntil = Date.now() + 24 * 60 * 60 * 1000; }
             window.localStorage.setItem(YYK_UPDATE_KEY, JSON.stringify(preferences));
         } catch { /* Closing still works when storage is unavailable. */ }
